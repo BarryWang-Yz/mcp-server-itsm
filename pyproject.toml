@@ -1,0 +1,25 @@
+[project]
+name = "mcp-server-itsm"
+version = "0.1.0"
+description = "Ivanti Tools Server for MCP"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "aiomysql>=0.2.0",
+    "cryptography>=44.0.3",
+    "dashscope",
+    "httpx>=0.28.1",
+    "llama-index>=0.12.35",
+    "mcp>=1.6.0",
+    "openai>=1.74.0",
+    "pip-tools>=7.4.1",
+    "python-dotenv>=1.1.0",
+]
+
+[tool.uv.workspace]
+members = [
+    "./pyproject.toml",
+]
+
+[[tool.uv.index]]
+url = "https://mirrors.aliyun.com/pypi/simple"
