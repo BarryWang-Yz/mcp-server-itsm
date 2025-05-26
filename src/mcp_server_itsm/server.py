@@ -5,23 +5,47 @@ import httpx
 import asyncio
 import aiomysql
 from aiomysql import DictCursor
-from typing import Any
+from typing import Any, Dict, List
 from mcp.server.fastmcp import FastMCP
 from dotenv import load_dotenv
+from fastmcp import FastMCP
 
 # Load environment variables
 load_dotenv()
 
+db_pool: aiomysql.Pool | None = None
+ivanti_session_key: str | None = None
+ivanti_tenant: str | None = None
+
 mcp_server = FastMCP("UnifiedTools")
 
+# ========== Database Connection Initialization ==========
+async def get_db_pool():
+    global db_pool
+    if db_pool is None:
+        db_pool = await aiomysql.create_pool(
+            host=os.getenv("DB_HOST"),
+            port=int(os.getenv("DB_PORT", 3306)),
+            user=os.getenv("DB_USER"),
+            password=os.getenv("DB_PASSWORD"),
+            db=os.getenv("DB_NAME"),
+            minsize=1, maxsize=10, autocommit=True,
+        )
+    return db_pool
+
+# ========== General SQL Execution ==========
+async def sql_query(query: str, params: tuple = (), *, as_dict: bool = False):
+    db_pool = await get_db_pool()
+    if not re.match(r"^\s*(select|show|describe|desc|explain)\b", query, re.I):
+        raise ValueError("Only read-only queries are permitted.")
+
+    async with db_pool.acquire() as conn:
+        cursor_cls = DictCursor if as_dict else aiomysql.Cursor
+        async with conn.cursor(cursor_cls) as cur:
+            await cur.execute(query, params)
+            return await cur.fetchall()
 
 # ========== MCP Tool Definitions ==========
-
-# @mcp_server.tool(description="Get the weather information of a specific city.")
-# async def query_weather(city: str) -> str:
-#     data = await fetch_weather(city)
-#     return format_weather(data)
-
 @mcp_server.tool(description="可以将数据库中所有的表格都列举出来，并且能获取所有表格的大致信息。")
 async def list_tables() -> List[Dict]:
     """列出当前数据库所有表的精确行数和大小（MB），不依赖 information_schema。"""
@@ -72,6 +96,7 @@ async def query_mysql(query: str) -> dict:
         raise ValueError("Only SELECT queries are allowed.")
     rows = await sql_query(query, as_dict=True)
     return {"payload": {"query": query, "rows": rows}}
+
 # ========== Ivanti API Tools ==========
 
 @mcp_server.tool(description="可以登录Ivanti系统并获取Session Key。成功登录后会缓存Session Key供后续接口使用。参数需要提供tenant、username、password、role。")
@@ -172,8 +197,15 @@ async def get_user_detail(login_id: str) -> dict:
         except Exception as e:
             return {"error": f"请求失败: {str(e)}"}
 
-# ========== Main Entrypoint ==========
-    
 
+app = mcp_server.streamable_http_app(path="/")
+# ========== Main Entrypoint ==========
 if __name__ == "__main__":
-    mcp_server.run(transport="stdio")
+    # mcp_server.run(transport="stdio")
+    port = int(os.getenv("PORT", 8000))
+
+    mcp_server.run(
+        transport="streamable-http",
+        host="0.0.0.0",
+        port=port,
+    )
