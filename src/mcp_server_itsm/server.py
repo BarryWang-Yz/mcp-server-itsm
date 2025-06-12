@@ -6,7 +6,7 @@ import asyncio
 import aiomysql
 from aiomysql import DictCursor
 from typing import Any, Dict, List
-from mcp.server.fastmcp import FastMCP
+# from mcp.server.fastmcp import FastMCP
 from dotenv import load_dotenv
 from fastmcp import FastMCP
 
@@ -16,6 +16,8 @@ load_dotenv()
 db_pool: aiomysql.Pool | None = None
 ivanti_session_key: str | None = None
 ivanti_tenant: str | None = None
+_rag_query_engine = None
+_rag_persist_path = None
 
 mcp_server = FastMCP("UnifiedTools")
 
@@ -25,7 +27,7 @@ async def get_db_pool():
     if db_pool is None:
         db_pool = await aiomysql.create_pool(
             host=os.getenv("DB_HOST"),
-            port=int(os.getenv("DB_PORT", 3306)),
+            port=int(os.getenv("DB_PORT", 3305)),
             user=os.getenv("DB_USER"),
             password=os.getenv("DB_PASSWORD"),
             db=os.getenv("DB_NAME"),
@@ -197,6 +199,45 @@ async def get_user_detail(login_id: str) -> dict:
         except Exception as e:
             return {"error": f"请求失败: {str(e)}"}
 
+# ========== Retrieve Augmented Generation ==========
+from src.mcp_server_itsm.rag import indexing, create_query_engine
+from llama_index.core import StorageContext, load_index_from_storage
+from llama_index.embeddings.dashscope import DashScopeEmbedding,DashScopeTextEmbeddingModels
+
+@mcp_server.tool(description="可以创建一个索引，参数名为document_path和persist_path。")
+async def build_rag_index(document_path: str = "./docs", persist_path: str = "knowledge_base/test") -> dict:
+    try:
+        indexing(document_path=document_path, persist_path=persist_path)
+        return {"status": "success",
+                "message": f"索引已成功创建并存储到 {persist_path}"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+    
+@mcp_server.tool(description="加载以持久化的索引，并创建流式RAG搜索引擎。参数名为persist_path。")
+async def init_rag_index(persist_path: str = "knowledge_base/test") -> dict:
+    global _rag_query_engine, _rag_persist_path
+    try:
+        storage_context = StorageContext.from_defaults(persist_dir=persist_path)
+        index = load_index_from_storage(storage_context, embed_model=DashScopeEmbedding(
+      model_name=DashScopeTextEmbeddingModels.TEXT_EMBEDDING_V2))
+
+        _rag_query_engine = create_query_engine(index)
+        _rag_persist_path = persist_path
+        return {"status": "success", "message": "RAG索引已成功加载并创建查询引擎。"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+    
+@mcp_server.tool(description="执行RAG查询。参数为query_str（用户问题）")
+async def run_rag_query(query_str: str) -> dict:
+    if _rag_query_engine is None or _rag_persist_path is None:
+        return {"status": "error", "message": "RAG索引未初始化，请先调用init_rag_index。"}
+    
+    try:
+        response = await _rag_query_engine.query(query_str)
+        return {"status": "success", "response": str(response)}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+    
 
 app = mcp_server.streamable_http_app(path="/")
 # ========== Main Entrypoint ==========
